@@ -89,18 +89,3 @@ resources/<前缀>_Vol.<号>.m4a
 CLI，未登录时回退到 GitHub REST API（需 `GITHUB_TOKEN`）。
 
 > ⚠️ 托管音频的仓库必须是**公开**仓库，否则 ASR 服务端无法匿名拉取音频。
-
-## 与 DeepBrain 的分工
-
-| 功能 | 归属 |
-|---|---|
-| 音频下载 / 转换 | DeepBrain |
-| 上传音频到 GitHub Release（供 ASR） | **PodcastDownloader**（默认 `feisimonwangdev/PodcastDownloader`） |
-| 转录（AUDIO LLM） | **PodcastDownloader** |
-| 分段（LLM） | **PodcastDownloader** |
-| Pattern 提取（LLM） | DeepBrain |
-| AI 教练 Web 应用 | DeepBrain |
-
-> 注：DeepBrain 的 `upload` 阶段仍可把 mp3 上传到它自己的仓库；
-> 但供 paraformer-v2 拉取的公开 URL 由 **PodcastDownloader** 在本项目内
-> 上传到 `GITHUB_REPO` 指定的仓库 release 产生。
