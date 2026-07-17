@@ -95,7 +95,7 @@ def _heuristic_segments(full_lines, vol):
     return segments
 
 
-def stage_segment(vols=None, verbose=True):
+def stage_segment(bases=None, vols=None, verbose=True):
     env = load_dotenv()
     api_key = env.get("LLM_API_KEY") or env.get("AUDIO_API_KEY")
     if not api_key:
@@ -105,7 +105,10 @@ def stage_segment(vols=None, verbose=True):
     model = env.get("LLM_MODEL", "qwen-plus")
 
     txs = sorted(OUT_DIR.glob("*_Vol.*_Transcript.txt"))
-    if vols is not None:
+    if bases is not None:
+        want = set(bases)
+        txs = [t for t in txs if _base_from_tx(t) in want]
+    elif vols is not None:
         want = {str(x) for x in vols}
         txs = [t for t in txs if parse_base(_base_from_tx(t))[1] in want]
 

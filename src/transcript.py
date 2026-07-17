@@ -77,9 +77,12 @@ def _base_from_raw(raw_path: Path) -> str:
     return raw_path.stem.replace("_Transcription.raw", "")
 
 
-def stage_transcript(vols=None, verbose=True):
+def stage_transcript(bases=None, vols=None, verbose=True):
     raws = sorted(OUT_DIR.glob("*_Vol.*_Transcription.raw.json"))
-    if vols is not None:
+    if bases is not None:
+        want = set(bases)
+        raws = [r for r in raws if _base_from_raw(r) in want]
+    elif vols is not None:
         want = {str(x) for x in vols}
         raws = [r for r in raws if parse_base(_base_from_raw(r))[1] in want]
 

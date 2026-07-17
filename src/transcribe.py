@@ -97,7 +97,7 @@ def _poll_one(api_key, task_id, host, timeout_sec=7200):
     return None
 
 
-def stage_transcribe(vols=None, verbose=True):
+def stage_transcribe(bases=None, vols=None, verbose=True):
     env = load_dotenv()
     api_key = env.get("AUDIO_API_KEY")
     if not api_key:
@@ -107,7 +107,12 @@ def stage_transcribe(vols=None, verbose=True):
     repo = env.get("GITHUB_REPO", DEFAULT_REPO)
     token = env.get("GITHUB_TOKEN") or None
 
-    if vols is None:
+    if bases is not None:
+        want = set(bases)
+        # 与默认分支一致：已转录（raw 存在）的集也跳过，满足「已转录不再转录」
+        targets = [(p, v, b) for (p, v, b) in resource_targets()
+                   if b in want and not _raw_path(b).exists()]
+    elif vols is None:
         targets = [(p, v, b) for (p, v, b) in resource_targets()
                    if not _raw_path(b).exists()]
     else:
