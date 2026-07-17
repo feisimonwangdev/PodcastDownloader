@@ -4,9 +4,6 @@
 # ---- Large source media (hosted via GitHub Releases, NOT in git) ----
 resources/
 
-# ---- Generated artifacts (transcripts / segments / raw ASR) ----
-out/
-
 # ---- Python ----
 __pycache__/
 *.pyc
