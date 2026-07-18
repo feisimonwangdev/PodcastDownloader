@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """功能 B：LLM 将 transcript -> 独立问答片段（QA segmentation）。
 
-输出：out/segments/<base>_segments.json
+输出：out/<前缀>/<base>_segments.json
 文件名 base（含前缀）从 transcript 文件名解析，绝不硬编码播客名。
 优先用 LLM 切分；LLM 失败或限流时回退到基于关键词的启发式切分。
 """
@@ -11,7 +11,7 @@ import json
 import time
 from pathlib import Path
 
-from src.utils import OUT_DIR, SEGMENTS_DIR, load_dotenv, llm_chat, parse_base
+from src.utils import OUT_DIR, load_dotenv, llm_chat, parse_base, series_out_dir
 
 NL = chr(10)
 
@@ -104,7 +104,7 @@ def stage_segment(bases=None, vols=None, verbose=True):
     base_url = env.get("LLM_BASE_URL", "")
     model = env.get("LLM_MODEL", "qwen-plus")
 
-    txs = sorted(OUT_DIR.glob("*_Vol.*_Transcript.txt"))
+    txs = sorted(OUT_DIR.glob("*/*_Vol.*_Transcript.txt"))
     if bases is not None:
         want = set(bases)
         txs = [t for t in txs if _base_from_tx(t) in want]
@@ -117,12 +117,12 @@ def stage_segment(bases=None, vols=None, verbose=True):
             print("无待切分的 transcript")
         return 0
 
-    SEGMENTS_DIR.mkdir(parents=True, exist_ok=True)
     total = 0
     for i, tx in enumerate(txs, 1):
         base = _base_from_tx(tx)
         _, vol = parse_base(base)
-        sp = SEGMENTS_DIR / (base + "_segments.json")
+        sp = series_out_dir(base) / (base + "_segments.json")
+        sp.parent.mkdir(parents=True, exist_ok=True)
         if sp.exists() and sp.stat().st_size > 50:
             try:
                 with open(sp) as f:

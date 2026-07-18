@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""从 in/*.txt 读取播客链接并下载音频到 resources/。
+"""从 in/*.txt 读取播客链接并下载音频到 resources/<前缀>/。
 
 链接文件命名约定（绝不硬编码播客名）：
     in/Qianjing.txt  -> 前缀 'Qianjing_'
     in/Xxxxxx.txt    -> 前缀 'Xxxxxx_'
 每行为一个播客单集链接，可含空行；文件名即系列前缀。
 
-产出：resources/<前缀>Vol.<号>.m4a
+产出：resources/<系列>/<前缀>Vol.<号>.m4a
+    其中「<系列>」为 base 中 `_Vol.` 之前的部分（如 Qianjing，不含下划线），
+    作为 resources/ 下第一层目录（即播客系列标识）；<base> = <前缀>Vol.<号>。
     Vol 号从单集页面标题中的 'Vol.XXX' 解析；音频直链从 og:audio 解析。
 已存在同名文件则跳过（不重复下载）。
 """
@@ -18,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from src.utils import RESOURCES_DIR
+from src.utils import series_resources_dir
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
@@ -143,7 +145,7 @@ def download_episode(url, prefix, force=False):
     返回 (base, newly_downloaded)。已存在同名文件则跳过（newly=False）。
     """
     vol, audio_url, title, base = resolve_episode(url, prefix)
-    dest = RESOURCES_DIR / (base + ".m4a")
+    dest = series_resources_dir(base) / (base + ".m4a")
     if dest.exists() and not force:
         return base, False
     print(f"      ↓ 下载音频 -> {dest.name} (Vol.{vol})", file=sys.stderr, flush=True)

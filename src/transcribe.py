@@ -3,11 +3,11 @@
 """功能 A（转录 · 第 1 段）：本地 m4a -> ASR(paraformer-v2) -> raw JSON。
 
 核心流程：
-    - 读取本地 resources/ 的 m4a，由 audio_io 转码为 mp3 并上传到
+    - 读取 resources/<前缀>/ 的 m4a，由 audio_io 转码为 mp3 并上传到
       GitHub Release（默认 feisimonwangdev/PodcastDownloader，可用
       .env 的 GITHUB_REPO 覆盖），得到公开下载 URL 供 paraformer-v2 拉取。
     - 输出文件名前缀从 m4a 文件名派生（base），不再硬编码任何播客名。
-输出：out/<base>_Transcription.raw.json
+输出：out/<前缀>/<base>_Transcription.raw.json
 """
 
 import json
@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from src.utils import (
-    OUT_DIR, RESOURCES_DIR, load_dotenv, resource_targets,
+    OUT_DIR, load_dotenv, resource_targets, series_out_dir, series_resources_dir,
 )
 from src.audio_io import prepare_public_audio, DEFAULT_REPO
 
@@ -28,7 +28,7 @@ HOSTS = [
 
 
 def _raw_path(base: str) -> Path:
-    return OUT_DIR / (base + "_Transcription.raw.json")
+    return series_out_dir(base) / (base + "_Transcription.raw.json")
 
 
 def _submit_one(api_key, file_url, model):
@@ -128,7 +128,7 @@ def stage_transcribe(bases=None, vols=None, verbose=True):
         print(f"提交 {len(targets)} 个 episode ...")
     done, failed = 0, 0
     for prefix, vol, base in targets:
-        m4a = RESOURCES_DIR / (base + ".m4a")
+        m4a = series_resources_dir(base) / (base + ".m4a")
         if not m4a.exists():
             if verbose:
                 print(f"Vol.{vol}: 资源缺失 {m4a.name}")
@@ -167,7 +167,9 @@ def stage_transcribe(bases=None, vols=None, verbose=True):
         data["episode"] = f"Vol.{vol}"
         data["source"] = f"{base}.m4a"
         data["podcast"] = prefix
-        _raw_path(base).write_text(
+        raw_path = _raw_path(base)
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         if verbose:

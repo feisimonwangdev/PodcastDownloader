@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 """功能 A（转录 · 第 2 段）：raw JSON -> 角色分离可读 transcript。
 
-输出：out/<base>_Transcript.txt
+输出：out/<前缀>/<base>_Transcript.txt
 文件名 base（含前缀）从 raw JSON 文件名解析，绝不硬编码播客名。
 """
 
 import json
 from pathlib import Path
 
-from src.utils import OUT_DIR, fmt_ts, speaker_label, parse_base
+from src.utils import OUT_DIR, fmt_ts, speaker_label, parse_base, series_out_dir
 
 NL = chr(10)
 
@@ -78,7 +78,7 @@ def _base_from_raw(raw_path: Path) -> str:
 
 
 def stage_transcript(bases=None, vols=None, verbose=True):
-    raws = sorted(OUT_DIR.glob("*_Vol.*_Transcription.raw.json"))
+    raws = sorted(OUT_DIR.glob("*/*_Vol.*_Transcription.raw.json"))
     if bases is not None:
         want = set(bases)
         raws = [r for r in raws if _base_from_raw(r) in want]
@@ -94,7 +94,7 @@ def stage_transcript(bases=None, vols=None, verbose=True):
     total = 0
     for raw_path in raws:
         base = _base_from_raw(raw_path)
-        tx_path = OUT_DIR / (base + "_Transcript.txt")
+        tx_path = series_out_dir(base) / (base + "_Transcript.txt")
         if tx_path.exists():
             if verbose:
                 print(f"{base}: transcript 已存在")
@@ -102,6 +102,7 @@ def stage_transcript(bases=None, vols=None, verbose=True):
             continue
         try:
             transcript = generate_transcript(raw_path)
+            tx_path.parent.mkdir(parents=True, exist_ok=True)
             tx_path.write_text(transcript, encoding="utf-8")
             if verbose:
                 print(f"{base}: {transcript.count(NL)} 行")

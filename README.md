@@ -1,7 +1,7 @@
 # PodcastDownloader — 播客音频转写与分段
 
-从 `resources/` 读取已下载的播客音频，调用 **AUDIO LLM** 做分角色转录，再调用
-**文本 LLM** 做问答分段。两类产物分别落在 `out/` 与 `out/segments/`。
+从 `resources/<前缀>/` 读取已下载的播客音频，调用 **AUDIO LLM** 做分角色转录，再调用
+**文本 LLM** 做问答分段。产物按播客系列落到 `out/<前缀>/`（前缀取自 m4a 文件名）。
 
 > 本项目只负责「音频 → 转录 → 分段」。Pattern 提取、AI 教练等下游功能在
 > **DeepBrain** 项目中（见下文「与 DeepBrain 的分工」）。
@@ -16,11 +16,14 @@
 
 | 产物 | 路径 |
 |---|---|
-| 原始 ASR JSON | `out/<base>_Transcription.raw.json` |
-| 角色分离可读稿 | `out/<base>_Transcript.txt` |
-| 问答分段 | `out/segments/<base>_segments.json` |
+| 原始 ASR JSON | `out/<前缀>/<base>_Transcription.raw.json` |
+| 角色分离可读稿 | `out/<前缀>/<base>_Transcript.txt` |
+| 问答分段 | `out/<前缀>/<base>_segments.json` |
 
-例如 `Qianjing_Vol.101.m4a` → `Qianjing_Vol.101_Transcription.raw.json` 等。
+`<前缀>` 为 m4a 文件名 `_Vol.` 之前的部分（不含下划线，如 `Qianjing`），作为
+`out/` 下的第一层目录；不同播客自动归入各自目录。
+
+例如 `Qianjing_Vol.101.m4a` → `out/Qianjing/Qianjing_Vol.101_Transcription.raw.json` 等。
 
 ## 目录结构
 
@@ -28,11 +31,13 @@
 PodcastDownloader/
 ├── pipeline.py            # 统一入口
 ├── in/                    # 播客链接清单（每个系列一个 Xxxxxx.txt）
-├── resources/             # 已下载音频：<前缀>_Vol.<号>.m4a
-├── out/                   # 转写产物
-│   ├── <base>_Transcription.raw.json
-│   ├── <base>_Transcript.txt
-│   └── segments/
+├── resources/             # 已下载音频（按系列分子目录）
+│   └── <前缀>/
+│       └── <base>.m4a
+├── out/                   # 转写产物（按系列分子目录）
+│   └── <前缀>/
+│       ├── <base>_Transcription.raw.json
+│       ├── <base>_Transcript.txt
 │       └── <base>_segments.json
 └── src/
     ├── utils.py           # 路径/dotenv/LLM 客户端/前缀派生
@@ -78,7 +83,7 @@ python3 pipeline.py sync                   # 读取 in/ 链接 -> 下载 -> 转�
 处理流程：
 
 ```
-resources/<前缀>_Vol.<号>.m4a
+resources/<前缀>/<base>.m4a
    │
    ▼ transcribe   — 转码为 mp3 → 上传 GitHub Release → paraformer-v2 ASR → raw JSON
    ▼ transcript   — raw JSON → 角色分离对话文本
@@ -113,7 +118,8 @@ python3 pipeline.py sync
 
 1. **下载**：读取 `in/*.txt` 全部链接；从链接页面解析标题中的 `Vol.XXX`
    作为期号、从 `og:audio` 解析音频直链；保存到
-   `resources/<前缀>Vol.<号>.m4a`（前缀来自 `.txt` 文件名，绝不硬编码）。
+   `resources/<系列>/<前缀>Vol.<号>.m4a`（`<系列>` 为 base 中 `_Vol.` 之前部分，
+   如 Qianjing；前缀来自 `.txt` 文件名，绝不硬编码）。
 2. **转录 / 稿本 / 分段**：对已下载音频依次执行三阶段。
 
 **幂等续跑**：每个阶段都按产物是否存在来跳过——已下载的不再下、已转录的
@@ -123,7 +129,7 @@ python3 pipeline.py sync
 
 > 新增一个播客系列只需在 `in/` 放一个 `Xxxxxx.txt` 并填入链接，无需改动任何代码。
 
-转录阶段读取**本地** `resources/`，经 ffmpeg 转码为 mp3 后，上传到
+转录阶段读取 **本地** `resources/<前缀>/`，经 ffmpeg 转码为 mp3 后，上传到
 **GitHub Release**（默认 `feisimonwangdev/PodcastDownloader`，可用 `GITHUB_REPO`
 覆盖）得到公开下载 URL，再提交给 paraformer-v2。上传优先使用已登录的 `gh`
 CLI，未登录时回退到 GitHub REST API（需 `GITHUB_TOKEN`）。

@@ -3,13 +3,15 @@
 """PodcastDownloader 共享工具：路径、dotenv、LLM 客户端、播客前缀派生。
 
 前缀规则（关键，绝不硬编码）：
-    资源文件命名为  '<前缀>_Vol.<号>.m4a'  （例：Qianjing_Vol.101.m4a）
+    资源文件路径
+        resources/<前缀>/<前缀>_Vol.<号>.m4a   （例：resources/Qianjing/Qianjing_Vol.101.m4a）
     所有输出文件共享同一个 base = 资源文件主干（不含扩展名）：
-        out/<base>_Transcription.raw.json
-        out/<base>_Transcript.txt
-        out/segments/<base>_segments.json
-    base 的前缀部分直接从 m4a 文件名解析得到，因此换一个播客
-    （不同前缀）无需改动任何代码。
+        out/<前缀>/<base>_Transcription.raw.json
+        out/<前缀>/<base>_Transcript.txt
+        out/<前缀>/<base>_segments.json
+    <前缀> 为 m4a 文件名 `_Vol.` 之前的部分（不含下划线，如 Qianjing），同时作为
+    resources/ 与 out/ 下第一层目录（即播客系列标识）。base 的前缀部分直接从
+    m4a 文件名解析得到，因此换一个播客（不同前缀）会自动落入各自目录，无需改动任何代码。
 """
 
 import json
@@ -23,7 +25,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RESOURCES_DIR = PROJECT_ROOT / "resources"
 OUT_DIR = PROJECT_ROOT / "out"
-SEGMENTS_DIR = OUT_DIR / "segments"
 
 
 # ---------------------------------------------------------------------------
@@ -76,10 +77,31 @@ def parse_base(base: str):
     return "", base
 
 
+def series_out_dir(base: str) -> Path:
+    """base 所在系列的输出目录：out/<前缀>。
+
+    <前缀> 取 base 中 `_Vol.` 之前的部分（即播客系列标识，不含下划线），
+    与 m4a 命名约定一致；无前缀时回退到 `_misc`，避免把文件直接散落 out/ 根。
+    """
+    prefix, _ = parse_base(base)
+    return OUT_DIR / (prefix or "_misc")
+
+
+def series_resources_dir(base: str) -> Path:
+    """base 所在系列的资源目录：resources/<前缀>。
+
+    与 series_out_dir 同一套前缀派生（均来自 parse_base），保证 resources/
+    与 out/ 下的第一层目录名一致；无前缀时回退到 `_misc`，避免文件散落
+    resources/ 根。供 download（写入音频）与 transcribe（读取音频）共用。
+    """
+    prefix, _ = parse_base(base)
+    return RESOURCES_DIR / (prefix or "_misc")
+
+
 def resource_targets():
     """返回 [(prefix, vol, base), ...]，按 base 排序；base 不含扩展名。"""
     out = []
-    for f in sorted(RESOURCES_DIR.glob("*_Vol.*.m4a")):
+    for f in sorted(RESOURCES_DIR.glob("*/*_Vol.*.m4a")):
         prefix, vol, base = parse_resource_stem(f.stem)
         out.append((prefix, vol, base))
     return out

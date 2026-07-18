@@ -3,9 +3,9 @@
 """PodcastDownloader 统一入口。
 
 分工：
-    - 读取 resources/ 中已下载的音频（命名 <前缀>_Vol.<号>.m4a）
+    - 读取 resources/<前缀>/ 中已下载的音频（命名 <前缀>_Vol.<号>.m4a）
     - 功能 A（transcribe + transcript）：AUDIO LLM 分角色转录 -> out/
-    - 功能 B（segment）：LLM 将 transcript 切分为问答片段 -> out/segments/
+    - 功能 B（segment）：LLM 将 transcript 切分为问答片段 -> out/<前缀>/
     - 功能 C（sync）：从 in/*.txt 读取播客链接 -> 下载音频 -> 转录 -> 稿本 -> 分段
 
 与 DeepBrain 的区别：本工程只负责「链接 -> 音频 -> 转录 -> 分段」，不提取 Pattern。
@@ -31,8 +31,8 @@ from src.transcribe import stage_transcribe
 from src.transcript import stage_transcript
 from src.segment import stage_segment
 from src.utils import (
-    load_dotenv, RESOURCES_DIR, OUT_DIR, SEGMENTS_DIR, resource_targets, parse_base,
-    PROJECT_ROOT,
+    load_dotenv, RESOURCES_DIR, OUT_DIR, resource_targets, parse_base,
+    PROJECT_ROOT, series_out_dir,
 )
 
 
@@ -42,17 +42,16 @@ def show_status():
 
     resources = sorted(v for (_p, v, _b) in resource_targets())
     raws = sorted(parse_base(p.stem.replace("_Transcription.raw", ""))[1]
-                  for p in OUT_DIR.glob("*_Vol.*_Transcription.raw.json"))
+                  for p in OUT_DIR.glob("*/*_Vol.*_Transcription.raw.json"))
     transcripts = sorted(parse_base(p.stem.replace("_Transcript", ""))[1]
-                         for p in OUT_DIR.glob("*_Vol.*_Transcript.txt"))
+                         for p in OUT_DIR.glob("*/*_Vol.*_Transcript.txt"))
     segments = 0
-    if SEGMENTS_DIR.exists():
-        for sf in SEGMENTS_DIR.glob("*_Vol.*_segments.json"):
-            try:
-                with open(sf) as f:
-                    segments += len(_json.load(f))
-            except Exception:
-                pass
+    for sf in OUT_DIR.glob("*/*_Vol.*_segments.json"):
+        try:
+            with open(sf) as f:
+                segments += len(_json.load(f))
+        except Exception:
+            pass
 
     print("=" * 55)
     print("  PodcastDownloader Pipeline Status")
@@ -132,13 +131,13 @@ def stage_sync(in_dir=None, verbose=True):
             bases.append(b)
 
     def raw_ok(b):
-        return (OUT_DIR / (b + "_Transcription.raw.json")).exists()
+        return (series_out_dir(b) / (b + "_Transcription.raw.json")).exists()
 
     def tx_ok(b):
-        return (OUT_DIR / (b + "_Transcript.txt")).exists()
+        return (series_out_dir(b) / (b + "_Transcript.txt")).exists()
 
     def seg_ok(b):
-        p = SEGMENTS_DIR / (b + "_segments.json")
+        p = series_out_dir(b) / (b + "_segments.json")
         return p.exists() and p.stat().st_size > 50
 
     pre = {b: (raw_ok(b), tx_ok(b), seg_ok(b)) for b in bases}
