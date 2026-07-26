@@ -58,6 +58,105 @@ def compress_transcript(transcript, max_turns=200, turn_max_chars=50):
     return NL.join(opens + others)
 
 
+# 强来电开场标记：一个听众连线通常只出现一次，用作确定性分段边界
+STRONG_OPEN = ["老师你好", "连到你", "听到吗", "你好钱", "你好老师", "哈喽"]
+
+
+def _header_end(full_lines):
+    for j, line in enumerate(full_lines):
+        if line.strip() == "---":
+            return j + 1
+    return 0
+
+
+def _opening_boundaries(full_lines):
+    """返回全文里出现强来电开场白的说话人行索引（确定性分段边界）。
+
+    用于兜底：LLM 有时即便看到开场白仍把多个听众合并成一段（且带温度
+    导致结果不稳定）。此函数不依赖 LLM，确定性地找出每个听众连线的起点。
+    """
+    he = _header_end(full_lines)
+    bounds = []
+    for j in range(max(0, he), len(full_lines) - 2):
+        line = full_lines[j].strip()
+        nl = full_lines[j + 1].strip() if j + 1 < len(full_lines) else ""
+        if re.match(r"^\s*\[[^\]]*\]\s*Speaker[A-Za-z]+:", line):
+            c = line + " " + nl[:40]
+            if any(kw in c for kw in STRONG_OPEN):
+                bounds.append(j)
+    # 同一听众连续多个强标记只保留首个，避免过切
+    dedup = []
+    for b in bounds:
+        if not dedup or b - dedup[-1] > 3:
+            dedup.append(b)
+    return dedup
+
+
+SUMMARIZE_HEADER = ("用一句话概括这段播客问答片段的核心问题与主持人建议。"
+                    "只输出概括文本，不要解释、不要序号。")
+
+
+def _summarize_segment(api_key, base_url, model, text):
+    snippet = text[:1500]
+    try:
+        return llm_chat(api_key, base_url, model,
+                        [{"role": "user", "content": SUMMARIZE_HEADER + "\n\n" + snippet}],
+                        temperature=0.2, max_tokens=128).strip()
+    except Exception:
+        return ""
+
+
+def _caller_bound_segments(full_lines, bounds, vol):
+    """按听众开场白边界切分（确定性）。每段以某个听众开场白起始。"""
+    he = _header_end(full_lines)
+    pts = [he] + bounds + [len(full_lines)]
+    segs = []
+    for bi in range(len(pts) - 1):
+        txt = NL.join(full_lines[pts[bi]:pts[bi + 1]])
+        if len(txt.strip()) < 100:
+            if segs:
+                segs[-1]["text"] = segs[-1]["text"] + NL + txt
+            continue
+        segs.append({"segment_index": len(segs) + 1, "summary": "", "text": txt})
+    for i, s in enumerate(segs):
+        s["segment_index"] = i + 1
+    return segs
+
+
+def _enrich_summaries(api_key, base_url, model, segments, vol):
+    for s in segments:
+        summary = _summarize_segment(api_key, base_url, model, s["text"])
+        s["summary"] = summary or ("Vol." + vol + "_S" + str(s["segment_index"]))
+        time.sleep(1)
+    return segments
+
+
+def _map_llm_segments(llm_segs, full_lines):
+    n = len(llm_segs)
+    segments, spans = [], []
+    for idx, ls in enumerate(llm_segs):
+        sl, el = (idx * len(full_lines) // n,
+                  (idx + 1) * len(full_lines) // n if idx < n - 1 else len(full_lines))
+        fkw = ls.get("first_line", "")
+        if fkw and len(fkw) >= 2:
+            for j in range(max(0, sl - 30), min(len(full_lines), sl + 30)):
+                if fkw[:4] in full_lines[j]:
+                    sl = j
+                    break
+        segments.append({
+            "segment_index": ls.get("index", idx + 1),
+            "summary": ls.get("summary", ""),
+            "text": NL.join(full_lines[sl:el]),
+        })
+        spans.append((sl, el))
+    return segments, spans
+
+
+def _strict_merged(spans, bounds):
+    """严格判定：是否有某段内跨越了 >=2 个真实听众开场白边界（错位合并）。"""
+    return any(sum(1 for x in bounds if sl <= x < el) >= 2 for sl, el in spans)
+
+
 SEGMENT_HEADER = ("分析播客压缩版，识别独立问答片段。新问答始于新听众连线"
                   "（老师你好、钱老师、我的问题是等开场）。片头介绍不算片段。\n\n"
                   "输出JSON数组，每项有index,summary,first_line。只输出JSON数组。\n\n")
@@ -159,26 +258,22 @@ def stage_segment(bases=None, vols=None, verbose=True):
                   end="", flush=True)
         try:
             llm_segs = segment_transcript(api_key, base_url, model, transcript)
-            n = len(llm_segs)
-            segments = []
-            for idx, ls in enumerate(llm_segs):
-                sl, el = (idx * len(full_lines) // n,
-                          (idx + 1) * len(full_lines) // n if idx < n - 1 else len(full_lines))
-                fkw = ls.get("first_line", "")
-                if fkw and len(fkw) >= 2:
-                    for j in range(max(0, sl - 30), min(len(full_lines), sl + 30)):
-                        if fkw[:4] in full_lines[j]:
-                            sl = j
-                            break
-                segments.append({
-                    "segment_index": ls.get("index", idx + 1),
-                    "summary": ls.get("summary", ""),
-                    "text": NL.join(full_lines[sl:el]),
-                })
+            mapped, spans = _map_llm_segments(llm_segs, full_lines)
+            bounds = _opening_boundaries(full_lines)
+            cb = _caller_bound_segments(full_lines, bounds, vol)
+            # 兜底：LLM 把多个听众合并时，强制按听众开场白边界切分
+            #   - 段数少于真实边界应切数，或某段内跨越 >=2 个真实边界（错位合并）
+            # 用严格边界判定，避免中段闲聊里的开场白关键词造成误触发
+            if (len(bounds) >= 2 and len(mapped) < len(cb)) or _strict_merged(spans, bounds):
+                segments = _enrich_summaries(api_key, base_url, model, cb, vol)
+                tag = "caller-bound"
+            else:
+                segments = mapped
+                tag = "LLM"
             with open(sp, "w", encoding="utf-8") as f:
                 json.dump(segments, f, ensure_ascii=False, indent=2)
             if verbose:
-                print(f" -> {len(segments)} segments (LLM)", flush=True)
+                print(f" -> {len(segments)} segments ({tag})", flush=True)
             total += len(segments)
         except Exception as e:
             segments = _heuristic_segments(full_lines, vol)
