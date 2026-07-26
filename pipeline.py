@@ -17,8 +17,8 @@
     python3 pipeline.py transcribe [--vol 101]
     python3 pipeline.py transcript [--vol 101]
     python3 pipeline.py segment    [--vol 101]
-    python3 pipeline.py all        [--vol 101]
-    python3 pipeline.py sync               # 读取 in/*.txt，下载+转录+分段（已完成自动跳过）
+    python3 pipeline.py all        [--vol 101]   # 全流水线：读取 in/*.txt 下载 + 转录 + 稿本 + 分段
+    python3 pipeline.py sync               # 同 all，下载 in/*.txt 新链接并转录+稿本+分段（已完成自动跳过）
 """
 
 from __future__ import annotations
@@ -76,10 +76,15 @@ def show_status():
 
 
 def stage_all(vols=None):
+    # 阶段 0：先读取 in/*.txt 下载新链接。
+    # 这是此前缺失的一步——旧版 `all` 只跑「转录→稿本→分段」，不读取链接，
+    # 因此 in/ 里新增的播客不会被下载与处理。修复后 `all` 才是真正的全流水线。
+    run_download_phase(verbose=True)
+
     errors = 0
-    for fn, name in [(lambda: stage_transcribe(vols, verbose=True), "transcribe"),
-                     (lambda: stage_transcript(vols, verbose=True), "transcript"),
-                     (lambda: stage_segment(vols, verbose=True), "segment")]:
+    for fn, name in [(lambda: stage_transcribe(vols=vols, verbose=True), "transcribe"),
+                     (lambda: stage_transcript(vols=vols, verbose=True), "transcript"),
+                     (lambda: stage_segment(vols=vols, verbose=True), "segment")]:
         print(f"\n{'='*40}\n  Stage: {name}\n{'='*40}")
         rc = fn()
         if rc and rc > 0:
@@ -88,23 +93,22 @@ def stage_all(vols=None):
     return errors
 
 
-def stage_sync(in_dir=None, verbose=True):
-    """读取 in/*.txt 的链接 -> 下载音频 -> 转录 -> 稿本 -> 分段。
+def run_download_phase(in_dir=None, verbose=True):
+    """读取 in/*.txt 的播客链接并下载音频。
 
-    每个阶段只对「尚未完成」的集执行（按产物文件是否存在判定），
-    因此重跑可安全续跑：已下载/转录/分段的会被跳过，缺哪补哪。
-    结束时输出总结（下载/转录/稿本/分段 各自的新增·已存在·失败计数）。
-
-    链接文件命名即系列前缀：in/Qianjing.txt -> 前缀 'Qianjing_'，
-    文件名绝不硬编码，新增系列只需在 in/ 放一个 Xxxxxx.txt。
+    返回 (bases, resolved, links)：
+        bases    : 去重后的 base 列表（已下载或已存在），供转录/稿本/分段阶段使用；
+        resolved : 每项 (prefix, url, base|None, newly, err|None)，供汇总；
+        links    : 原始链接列表 (prefix, url, stem, line_no)。
+    未找到任何链接时返回 ([], [], [])。
     """
     from src.download import read_link_files, download_episode
 
     in_dir = Path(in_dir) if in_dir else (PROJECT_ROOT / "in")
     links = read_link_files(in_dir)
     if not links:
-        print(f"[sync] 在 {in_dir} 未找到任何链接（*.txt 中的 http 链接）。")
-        return 0
+        print(f"[download] 在 {in_dir} 未找到任何链接（*.txt 中的 http 链接）。")
+        return [], [], []
 
     # ---- Phase 1: 下载音频 ----
     print("\n" + "=" * 64)
@@ -129,6 +133,23 @@ def stage_sync(in_dir=None, verbose=True):
         if b and b not in _seen:
             _seen.add(b)
             bases.append(b)
+    return bases, resolved, links
+
+
+def stage_sync(in_dir=None, verbose=True):
+    """读取 in/*.txt 的链接 -> 下载音频 -> 转录 -> 稿本 -> 分段。
+
+    每个阶段只对「尚未完成」的集执行（按产物文件是否存在判定），
+    因此重跑可安全续跑：已下载/转录/分段的会被跳过，缺哪补哪。
+    结束时输出总结（下载/转录/稿本/分段 各自的新增·已存在·失败计数）。
+
+    链接文件命名即系列前缀：in/Qianjing.txt -> 前缀 'Qianjing_'，
+    文件名绝不硬编码，新增系列只需在 in/ 放一个 Xxxxxx.txt。
+    """
+    # ---- Phase 1: 下载音频（从 in/*.txt 读取链接并下载）----
+    bases, resolved, links = run_download_phase(in_dir, verbose)
+    if not bases and not resolved:
+        return 0
 
     def raw_ok(b):
         return (series_out_dir(b) / (b + "_Transcription.raw.json")).exists()
