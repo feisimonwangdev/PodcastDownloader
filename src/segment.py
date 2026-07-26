@@ -8,6 +8,7 @@
 """
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -16,7 +17,19 @@ from src.utils import OUT_DIR, load_dotenv, llm_chat, parse_base, series_out_dir
 NL = chr(10)
 
 
+OPEN_KW = ["老师你好", "钱老师", "哈喽", "我的问题是", "我想问", "你好钱",
+           "你好老师", "连到你", "听到吗", "主持人"]
+
+
 def compress_transcript(transcript, max_turns=200, turn_max_chars=50):
+    """压缩 transcript 供 LLM 做分段。
+
+    关键修正：原先只保留 SpeakerA/SpeakerB 的发言，但 ASR 给的说话人标签是
+    任意分配的（同一集里听众可能是 SpeakerC~G）。若只保留 A/B，听众连线的
+    开场白（老师你好/我的问题是…）会被整体过滤掉，LLM 看不到分段边界，
+    从而把整集误合并成 1 段。现改为保留「所有说话人」的发言，并优先保留
+    含开场白关键字的行，确保分段边界不丢失。
+    """
     lines = transcript.split(NL)
     turns, in_header = [], True
     for i, line in enumerate(lines):
@@ -28,16 +41,21 @@ def compress_transcript(transcript, max_turns=200, turn_max_chars=50):
         s = line.strip()
         if not s:
             continue
-        if s.startswith("[") and ("SpeakerA:" in s or "SpeakerB:" in s):
-            content = lines[i + 1].strip() if i + 1 < len(lines) else ""
-            sp = "A" if "SpeakerA:" in s else "B"
-            ts = s.split("]")[0].replace("[", "") if "]" in s else ""
-            truncated = content[:turn_max_chars] + ("..." if len(content) > turn_max_chars else "")
-            turns.append("[" + ts + "] Sp" + sp + ": " + truncated)
+        m = re.match(r"^\s*\[[^\]]*\]\s*(Speaker[A-Za-z]+):", s)
+        if not m:
+            continue
+        sp = m.group(1)
+        content = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        ts = s.split("]")[0].replace("[", "") if "]" in s else ""
+        truncated = content[:turn_max_chars] + ("..." if len(content) > turn_max_chars else "")
+        is_open = any(kw in (s + " " + content[:40]) for kw in OPEN_KW)
+        turns.append((is_open, "[" + ts + "] " + sp + ": " + truncated))
+    opens = [t for f, t in turns if f]
+    others = [t for f, t in turns if not f]
     if len(turns) > max_turns:
-        step = max(1, len(turns) // max_turns)
-        turns = turns[::step]
-    return NL.join(turns)
+        step = max(1, len(others) // max(1, max_turns - len(opens)))
+        others = others[::step]
+    return NL.join(opens + others)
 
 
 SEGMENT_HEADER = ("分析播客压缩版，识别独立问答片段。新问答始于新听众连线"
@@ -73,10 +91,10 @@ def _heuristic_segments(full_lines, vol):
     for j in range(max(0, he), len(full_lines) - 2):
         line = full_lines[j].strip()
         nl = full_lines[j + 1].strip() if j + 1 < len(full_lines) else ""
-        if "SpeakerB:" in line:
+        if re.match(r"^\s*\[[^\]]*\]\s*Speaker[A-Za-z]+:", line):
             c = line + " " + nl[:40]
             if any(kw in c for kw in ["老师你好", "钱老师", "哈喽", "我的问题是",
-                                      "我想问", "你好钱", "你好老师", "连到你", "听到吗"]):
+                                      "我想问", "你好钱", "你好老师", "连到你", "听到吗", "主持人"]):
                 boundaries.append(j)
     if len(boundaries) <= 1:
         boundaries = [he if he else 0, len(full_lines)]
