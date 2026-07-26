@@ -72,12 +72,14 @@ brew install ffmpeg   # 本地 m4a 兜底转码为 mp3
 
 ```bash
 python3 pipeline.py status                 # 查看进度
-python3 pipeline.py all                    # 转录 + 分段 全流程
+python3 pipeline.py all                    # 全流水线：读取 in/ 下载 -> 转录 -> 稿本 -> 分段
 python3 pipeline.py transcribe --vol 101  # 单集：ASR 转录
 python3 pipeline.py transcript --vol 101  # 单集：生成可读稿
 python3 pipeline.py segment    --vol 101  # 单集：LLM 分段
 python3 pipeline.py sync                   # 读取 in/ 链接 -> 下载 -> 转录 -> 分段（推荐）
 ```
+
+> `all` 与 `sync` 现已等价：都会先读取 `in/*.txt` 下载新链接，再跑转录/稿本/分段全流程；`all` 额外支持 `--vol` 仅处理单集。
 
 处理流程：
 
