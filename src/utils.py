@@ -198,6 +198,10 @@ def llm_chat(api_key, base_url, model, messages, *,
 
 
 def _call_model(url, api_key, m, messages, temperature, max_tokens, timeout, retries):
+    # kimi 系模型（api.kimi.com）服务端强制 temperature=1，其他取值直接 400。
+    # 在发送前按模型名改写，一处适配、全部调用点生效，避免逐处修改 segment 等。
+    if "kimi" in m.lower():
+        temperature = 1
     body = json.dumps({
         "model": m, "messages": messages,
         "temperature": temperature, "max_tokens": max_tokens,

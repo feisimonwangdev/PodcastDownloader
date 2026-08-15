@@ -101,7 +101,7 @@ def _summarize_segment(api_key, base_url, model, text):
     try:
         return llm_chat(api_key, base_url, model,
                         [{"role": "user", "content": SUMMARIZE_HEADER + "\n\n" + snippet}],
-                        temperature=0.2, max_tokens=128).strip()
+                        temperature=0.2, max_tokens=1024).strip()
     except Exception:
         return ""
 
@@ -167,7 +167,7 @@ def segment_transcript(api_key, base_url, model, transcript):
     prompt = SEGMENT_HEADER + compressed
     content = llm_chat(api_key, base_url, model,
                        [{"role": "user", "content": prompt}],
-                       temperature=0.1, max_tokens=1024)
+                       temperature=0.1, max_tokens=4096)
     js = content.strip()
     if js.startswith("```"):
         s = js.find("[")
