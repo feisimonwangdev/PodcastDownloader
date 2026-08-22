@@ -26,6 +26,37 @@ HOSTS = [
     ("std", "dashscope.aliyuncs.com"),
 ]
 
+STATE_DIR = Path(__file__).resolve().parent.parent / "state"
+ASR_TASKS_FILE = STATE_DIR / "asr_tasks.json"
+
+
+def _load_pending() -> dict:
+    """读取 pending ASR 任务（base -> {task_id, host, model}）。"""
+    try:
+        return json.loads(ASR_TASKS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_pending(pending: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    ASR_TASKS_FILE.write_text(
+        json.dumps(pending, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _write_raw(data, prefix, vol, base):
+    """补元数据并写 raw JSON，返回路径。"""
+    data["episode"] = f"Vol.{vol}"
+    data["source"] = f"{base}.m4a"
+    data["podcast"] = prefix
+    raw_path = _raw_path(base)
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return raw_path
+
 
 def _raw_path(base: str) -> Path:
     return series_out_dir(base) / (base + "_Transcription.raw.json")
@@ -65,7 +96,7 @@ def _submit_one(api_key, file_url, model):
 
 
 def _poll_one(api_key, task_id, host, timeout_sec=7200):
-    """轮询任务，成功返回解析后的 JSON dict，否则返回 None。"""
+    """轮询任务，返回 (data, status)。status: SUCCEEDED / FAILED / TIMEOUT。"""
     start = time.time()
     while (time.time() - start) < timeout_sec:
         time.sleep(15)
@@ -85,16 +116,16 @@ def _poll_one(api_key, task_id, host, timeout_sec=7200):
             succ = [x for x in results if x.get("subtask_status") == "SUCCEEDED"]
             if not succ:
                 print(f"    [WARN] 任务成功但无成功子结果: {json.dumps(resp.get('output', {}), ensure_ascii=False)[:400]}")
-                return None
+                return None, "FAILED"
             d = subprocess.run(
                 ["curl", "-s", "-L", "--max-time", "60", succ[0]["transcription_url"]],
                 capture_output=True, text=True, timeout=90,
             ).stdout
-            return json.loads(d)
+            return json.loads(d), "SUCCEEDED"
         if st in ("FAILED", "CANCELED"):
             print(f"    [ASR 任务 {st}] 详情: {json.dumps(resp.get('output', {}), ensure_ascii=False)[:600]}")
-            return None
-    return None
+            return None, "FAILED"
+    return None, "TIMEOUT"
 
 
 def stage_transcribe(bases=None, vols=None, verbose=True):
@@ -124,6 +155,11 @@ def stage_transcribe(bases=None, vols=None, verbose=True):
             print("无待转录 episode（已全部完成或不在 resources/ 中）")
         return 0
 
+    pending = _load_pending()
+    resumed = [b for b in pending if not _raw_path(b).exists()]
+    if verbose and resumed:
+        print(f"发现 {len(resumed)} 个未完成的 ASR 任务，将直接续跑: {', '.join(resumed)}")
+
     if verbose:
         print(f"提交 {len(targets)} 个 episode ...")
     done, failed = 0, 0
@@ -134,47 +170,63 @@ def stage_transcribe(bases=None, vols=None, verbose=True):
                 print(f"Vol.{vol}: 资源缺失 {m4a.name}")
             failed += 1
             continue
-        if verbose:
-            print(f"Vol.{vol}: 准备音频并上传到 GitHub Release ...")
-        try:
-            url, temp = prepare_public_audio(m4a, repo=repo, base=base, token=token)
-        except Exception as e:
-            if verbose:
-                print(f"Vol.{vol}: 音频准备失败 {e}")
-            failed += 1
-            continue
 
-        task_id, host = None, None
-        for m in (model,) + tuple(MODELS):
-            task_id, host = _submit_one(api_key, url, m)
-            if task_id:
+        temp = None
+        pend = pending.get(base)
+        if pend:
+            # 断点续跑：任务已提交过，直接轮询，不重复上传/提交
+            task_id, host = pend["task_id"], pend["host"]
+            if verbose:
+                print(f"Vol.{vol}: 续跑已有任务 task_id={task_id} host={host}")
+        else:
+            if verbose:
+                print(f"Vol.{vol}: 准备音频并上传到 GitHub Release ...")
+            try:
+                url, temp = prepare_public_audio(m4a, repo=repo, base=base, token=token)
+            except Exception as e:
                 if verbose:
-                    print(f"Vol.{vol}: 提交成功 task_id={task_id} model={m} host={host}")
-                break
-        if not task_id:
+                    print(f"Vol.{vol}: 音频准备失败 {e}")
+                failed += 1
+                continue
+
+            task_id, host = None, None
+            for m in (model,) + tuple(MODELS):
+                task_id, host = _submit_one(api_key, url, m)
+                if task_id:
+                    if verbose:
+                        print(f"Vol.{vol}: 提交成功 task_id={task_id} model={m} host={host}")
+                    break
+            if not task_id:
+                if verbose:
+                    print(f"Vol.{vol}: 提交失败")
+                failed += 1
+                continue
+            # 提交成功后立即落盘，进程被杀也能续跑
+            pending[base] = {"task_id": task_id, "host": host, "model": model}
+            _save_pending(pending)
+
+        data, status = _poll_one(api_key, task_id, host)
+        if status == "TIMEOUT":
+            # 任务仍在远端跑，保留 pending，下次 sync 自动续上
             if verbose:
-                print(f"Vol.{vol}: 提交失败")
+                print(f"Vol.{vol}: 轮询超时，任务仍在远端执行，已保留 task_id 供下次续跑")
+            failed += 1
+            continue
+        if status == "FAILED" or data is None:
+            # 终态失败：清除 pending，下次重新提交
+            pending.pop(base, None)
+            _save_pending(pending)
+            if verbose:
+                print(f"Vol.{vol}: 任务失败，已清除 pending 记录")
             failed += 1
             continue
 
-        data = _poll_one(api_key, task_id, host)
-        if data is None:
-            if verbose:
-                print(f"Vol.{vol}: 轮询失败/超时")
-            failed += 1
-            continue
-
-        data["episode"] = f"Vol.{vol}"
-        data["source"] = f"{base}.m4a"
-        data["podcast"] = prefix
-        raw_path = _raw_path(base)
-        raw_path.parent.mkdir(parents=True, exist_ok=True)
-        raw_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        raw_path = _write_raw(data, prefix, vol, base)
+        pending.pop(base, None)
+        _save_pending(pending)
         if verbose:
             n = len(data["transcripts"][0]["sentences"])
-            print(f"Vol.{vol}: 转录完成 {n} 句 -> {_raw_path(base).name}")
+            print(f"Vol.{vol}: 转录完成 {n} 句 -> {raw_path.name}")
         done += 1
 
         if temp is not None and temp.exists():
