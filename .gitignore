@@ -8,6 +8,9 @@ resources/
 __pycache__/
 *.pyc
 
+# ---- Runtime state (local caches: ASR tasks, link->base cache) ----
+state/
+
 # ---- OS / editor ----
 .DS_Store
 

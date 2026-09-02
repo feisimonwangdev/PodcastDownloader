@@ -14,13 +14,48 @@
 已存在同名文件则跳过（不重复下载）。
 """
 
+import json
 import re
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from src.utils import series_resources_dir
+from src.utils import series_resources_dir, PROJECT_ROOT
+
+# URL -> base 缓存：命中即跳过页面解析（避免每次 rerun 对所有链接发起 HTTP 抓取）。
+# 只记录「成功解析」的链接；失败链接不入缓存，下次运行自动重试。
+LINKS_CACHE_PATH = PROJECT_ROOT / "state" / "links.json"
+
+
+def load_link_cache():
+    """读取 state/links.json（URL -> base）；不存在或损坏时返回空 dict。"""
+    try:
+        data = json.loads(LINKS_CACHE_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_link_cache(cache):
+    """原子写回 URL -> base 缓存。"""
+    LINKS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = LINKS_CACHE_PATH.with_name(LINKS_CACHE_PATH.name + ".tmp")
+    tmp.write_text(json.dumps(cache, ensure_ascii=False, indent=1, sort_keys=True),
+                   encoding="utf-8")
+    tmp.replace(LINKS_CACHE_PATH)
+
+
+def cached_base(cache, url):
+    """缓存命中且对应音频文件仍存在时返回 base，否则返回 None。
+
+    文件存在性校验可自动处理缓存过期场景（音频被删、系列文件改名导致前缀变化）。
+    """
+    base = cache.get(url)
+    if not base:
+        return None
+    dest = series_resources_dir(base) / (base + ".m4a")
+    return base if dest.exists() else None
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")

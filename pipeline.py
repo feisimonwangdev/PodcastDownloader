@@ -102,7 +102,10 @@ def run_download_phase(in_dir=None, verbose=True):
         links    : 原始链接列表 (prefix, url, stem, line_no)。
     未找到任何链接时返回 ([], [], [])。
     """
-    from src.download import read_link_files, download_episode
+    from src.download import (
+        read_link_files, download_episode,
+        load_link_cache, save_link_cache, cached_base,
+    )
 
     in_dir = Path(in_dir) if in_dir else (PROJECT_ROOT / "in")
     links = read_link_files(in_dir)
@@ -115,10 +118,19 @@ def run_download_phase(in_dir=None, verbose=True):
     print(f"  SYNC · 读取 {len(links)} 个链接"
           f"（来自 {len({s for _, _, s, _ in links})} 个系列文件）")
     print("=" * 64)
+    cache = load_link_cache()
     resolved = []  # (prefix, url, base|None, newly, err)
+    n_cached = 0
     for i, (prefix, url, stem, ln) in enumerate(links, 1):
+        # 缓存命中：URL 此前已成功解析且音频仍在本地 -> 零网络请求直接跳过。
+        base_c = cached_base(cache, url)
+        if base_c:
+            resolved.append((prefix, url, base_c, False, None))
+            n_cached += 1
+            continue
         try:
             base, newly = download_episode(url, prefix)
+            cache[url] = base  # 解析成功即入缓存（无论是否新下载）
             resolved.append((prefix, url, base, newly, None))
             print(f"  [{i}/{len(links)}] {prefix}  {url}")
             print(f"        -> {base}.m4a  " + ("[新下载]" if newly else "[已存在·跳过]"))
@@ -126,6 +138,9 @@ def run_download_phase(in_dir=None, verbose=True):
             resolved.append((prefix, url, None, False, str(e)))
             print(f"  [{i}/{len(links)}] {prefix}  {url}")
             print(f"        [ERROR] 下载失败: {e}")
+    save_link_cache(cache)
+    if n_cached:
+        print(f"  [缓存] {n_cached}/{len(links)} 个链接此前已完成，直接跳过（无网络请求）。")
 
     # 去重（同一 vol 多个链接只处理一次）
     bases, _seen = [], set()
