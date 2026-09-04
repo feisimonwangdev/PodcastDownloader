@@ -14,5 +14,8 @@ state/
 # ---- OS / editor ----
 .DS_Store
 
+# ---- Local backup files ----
+*.bak-*
+
 # ---- Local agent & project memory (not for public repo) ----
 .workbuddy/
